@@ -1,0 +1,13 @@
+No Python at '"/Library/Frameworks/Python.framework/Versions/3.13/bin\python.exe'
+
+Starting CarrotKeyboard Windows...
+Allow this app through Windows Firewall when prompted.
+Find this PC IP with: ipconfig
+
+No Python at '"/Library/Frameworks/Python.framework/Versions/3.13/bin\python.exe'
+Press any key to continue . . .
+
+
+
+
+

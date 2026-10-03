@@ -1,0 +1,29 @@
+#!/bin/bash
+set -euo pipefail
+
+APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+RESOURCES_DIR="$APP_DIR/Resources"
+VENV_DIR="$HOME/.carrot_keyboard_venv"
+LOG_FILE="$HOME/Library/Logs/CarrotKeyboard.log"
+
+mkdir -p "$(dirname "$LOG_FILE")"
+exec >>"$LOG_FILE" 2>&1
+
+echo ""
+echo "==== CarrotKeyboard started at $(date) ===="
+
+show_error() {
+  /usr/bin/osascript -e "display dialog \"$1\" buttons {\"OK\"} default button \"OK\" with icon stop" >/dev/null 2>&1 || true
+}
+
+if ! command -v python3 >/dev/null 2>&1; then
+  show_error "Python 3 is required to run CarrotKeyboard."
+  exit 1
+fi
+
+if [ ! -x "$VENV_DIR/bin/python" ]; then
+  python3 -m venv "$VENV_DIR"
+fi
+
+"$VENV_DIR/bin/python" -m pip install --no-compile -r "$RESOURCES_DIR/requirements.txt"
+exec "$VENV_DIR/bin/python" "$RESOURCES_DIR/mac.py"
