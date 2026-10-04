@@ -21,6 +21,9 @@ except ImportError:
 
 DEFAULT_PORT = "50505"
 DEFAULT_HOTKEY = "cmd+option+control+q"
+DEFAULT_WINDOWS_HOTKEY = "cmd+option+control+w"
+DEFAULT_ANDROID_HOTKEY = "cmd+option+control+a"
+DEFAULT_ANDROID_ROTATE_HOTKEY = "cmd+option+control+r"
 CONFIG_PATH = os.path.join(
     os.path.expanduser("~"),
     "Library",
@@ -177,17 +180,30 @@ def save_config(data):
 
 
 class MacSender:
-    def __init__(self, host, port, suppress_keyboard, forward_mouse, suppress_mouse, hotkey):
+    def __init__(
+        self,
+        host,
+        port,
+        suppress_keyboard,
+        forward_mouse,
+        suppress_mouse,
+        hotkey,
+        target_name,
+        rotate_hotkey=None,
+    ):
         self.host = host
         self.port = int(port)
         self.suppress_keyboard = suppress_keyboard
         self.forward_mouse = forward_mouse
         self.suppress_mouse = suppress_mouse
         self.hotkey = hotkey
+        self.target_name = target_name
+        self.rotate_hotkey = rotate_hotkey or set()
         self.sock = None
         self.send_lock = threading.Lock()
         self.stop_event = threading.Event()
         self.pressed = set()
+        self.rotate_armed = True
         self.screen_width, self.screen_height = get_screen_size()
         self.last_mouse_move = 0.0
 
@@ -196,10 +212,10 @@ class MacSender:
             try:
                 self.sock = socket.create_connection((self.host, self.port), timeout=5)
                 self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                print(f"Connected to Windows PC at {self.host}:{self.port}", flush=True)
+                print(f"Connected to {self.target_name} at {self.host}:{self.port}", flush=True)
                 return
             except OSError as exc:
-                print(f"Waiting for Windows PC {self.host}:{self.port} ({exc})", flush=True)
+                print(f"Waiting for {self.target_name} {self.host}:{self.port} ({exc})", flush=True)
                 time.sleep(RECONNECT_DELAY)
 
     def send_json(self, data):
@@ -226,6 +242,13 @@ class MacSender:
     def should_quit(self):
         return self.hotkey.issubset(self.pressed)
 
+    def should_rotate_android(self):
+        return (
+            self.target_name == "Android Phone"
+            and self.rotate_hotkey
+            and self.rotate_hotkey.issubset(self.pressed)
+        )
+
     def on_press(self, key):
         token = key_to_hotkey_token(key)
         if token:
@@ -235,6 +258,12 @@ class MacSender:
             self.stop_event.set()
             return False
 
+        if self.rotate_armed and self.should_rotate_android():
+            self.rotate_armed = False
+            print("Android rotate hotkey pressed.", flush=True)
+            self.send_json({"device": "system", "action": "rotate"})
+            return
+
         payload = key_to_payload(key)
         if payload:
             self.send_json({"device": "keyboard", "action": "press", "key": payload})
@@ -243,6 +272,8 @@ class MacSender:
         token = key_to_hotkey_token(key)
         if token:
             self.pressed.discard(token)
+        if not self.should_rotate_android():
+            self.rotate_armed = True
         payload = key_to_payload(key)
         if payload:
             self.send_json({"device": "keyboard", "action": "release", "key": payload})
@@ -287,9 +318,9 @@ class MacSender:
         if self.stop_event.is_set():
             return
 
-        print("Forwarding Mac keyboard to Windows PC.", flush=True)
+        print(f"Forwarding Mac keyboard to {self.target_name}.", flush=True)
         if self.forward_mouse:
-            print("Forwarding Mac mouse to Windows PC.", flush=True)
+            print(f"Forwarding Mac mouse to {self.target_name}.", flush=True)
         print(f"Stop hotkey: {'+'.join(sorted(self.hotkey))}", flush=True)
 
         mouse_listener = None
@@ -316,7 +347,7 @@ class MacSender:
 
 
 class HotkeyRecorder(tk.Toplevel):
-    def __init__(self, parent, initial_hotkey):
+    def __init__(self, parent, initial_hotkey, default_hotkey, title="Record Hotkey"):
         super().__init__(parent)
         self.parent = parent
         self.title("Record Hotkey")
@@ -327,6 +358,8 @@ class HotkeyRecorder(tk.Toplevel):
 
         self.active_tokens = set()
         self.recorded_tokens = set(initial_hotkey)
+        self.default_hotkey = set(default_hotkey)
+        self.dialog_title = title
         self.result = None
 
         self.display_var = tk.StringVar(value=format_hotkey(self.recorded_tokens))
@@ -343,7 +376,7 @@ class HotkeyRecorder(tk.Toplevel):
         root.pack(fill="both", expand=True)
         root.columnconfigure(0, weight=1)
 
-        ttk.Label(root, text="Record Start/Stop Hotkey", font=("TkDefaultFont", 16, "bold")).grid(
+        ttk.Label(root, text=self.dialog_title, font=("TkDefaultFont", 16, "bold")).grid(
             row=0, column=0, sticky="w"
         )
         ttk.Label(root, textvariable=self.status_var).grid(row=1, column=0, sticky="w", pady=(6, 14))
@@ -382,7 +415,7 @@ class HotkeyRecorder(tk.Toplevel):
 
     def reset(self):
         self.active_tokens.clear()
-        self.recorded_tokens = parse_hotkey(DEFAULT_HOTKEY)
+        self.recorded_tokens = set(self.default_hotkey)
         self.refresh_display()
 
     def save(self):
@@ -405,27 +438,45 @@ class MacGui(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("CarrotKeyboard Mac")
-        self.geometry("680x500")
-        self.minsize(620, 460)
+        self.geometry("760x660")
+        self.minsize(700, 620)
 
         self.process = None
         self.output_queue = queue.Queue()
         self.config = load_config()
-        config_hotkey = self.config.get("hotkey", DEFAULT_HOTKEY)
+        config_windows_hotkey = self.config.get("windows_hotkey", DEFAULT_WINDOWS_HOTKEY)
+        config_android_hotkey = self.config.get("android_hotkey", DEFAULT_ANDROID_HOTKEY)
+        config_android_rotate_hotkey = self.config.get("android_rotate_hotkey", DEFAULT_ANDROID_ROTATE_HOTKEY)
         try:
-            hotkey_tokens = parse_hotkey(config_hotkey)
+            windows_hotkey_tokens = parse_hotkey(config_windows_hotkey)
         except ValueError:
-            config_hotkey = DEFAULT_HOTKEY
-            hotkey_tokens = parse_hotkey(DEFAULT_HOTKEY)
+            config_windows_hotkey = DEFAULT_WINDOWS_HOTKEY
+            windows_hotkey_tokens = parse_hotkey(DEFAULT_WINDOWS_HOTKEY)
+        try:
+            android_hotkey_tokens = parse_hotkey(config_android_hotkey)
+        except ValueError:
+            config_android_hotkey = DEFAULT_ANDROID_HOTKEY
+            android_hotkey_tokens = parse_hotkey(DEFAULT_ANDROID_HOTKEY)
+        try:
+            android_rotate_hotkey_tokens = parse_hotkey(config_android_rotate_hotkey)
+        except ValueError:
+            config_android_rotate_hotkey = DEFAULT_ANDROID_ROTATE_HOTKEY
+            android_rotate_hotkey_tokens = parse_hotkey(DEFAULT_ANDROID_ROTATE_HOTKEY)
 
-        self.host_var = tk.StringVar(value=self.config.get("host", ""))
+        self.target_var = tk.StringVar(value=self.config.get("target", "Windows PC"))
+        self.windows_host_var = tk.StringVar(value=self.config.get("windows_host", self.config.get("host", "")))
+        self.android_host_var = tk.StringVar(value=self.config.get("android_host", ""))
         self.port_var = tk.StringVar(value=str(self.config.get("port", DEFAULT_PORT)))
         self.suppress_keyboard_var = tk.BooleanVar(value=bool(self.config.get("suppress_keyboard", True)))
         self.forward_mouse_var = tk.BooleanVar(value=bool(self.config.get("forward_mouse", True)))
         self.suppress_mouse_var = tk.BooleanVar(value=bool(self.config.get("suppress_mouse", False)))
         self.auto_start_var = tk.BooleanVar(value=bool(self.config.get("auto_start", False)))
-        self.hotkey_var = tk.StringVar(value=config_hotkey)
-        self.hotkey_display_var = tk.StringVar(value=format_hotkey(hotkey_tokens))
+        self.windows_hotkey_var = tk.StringVar(value=config_windows_hotkey)
+        self.windows_hotkey_display_var = tk.StringVar(value=format_hotkey(windows_hotkey_tokens))
+        self.android_hotkey_var = tk.StringVar(value=config_android_hotkey)
+        self.android_hotkey_display_var = tk.StringVar(value=format_hotkey(android_hotkey_tokens))
+        self.android_rotate_hotkey_var = tk.StringVar(value=config_android_rotate_hotkey)
+        self.android_rotate_hotkey_display_var = tk.StringVar(value=format_hotkey(android_rotate_hotkey_tokens))
         self.status_var = tk.StringVar(value="Stopped")
         self.gui_pressed = set()
         self.hotkey_armed = True
@@ -447,23 +498,28 @@ class MacGui(tk.Tk):
         root = ttk.Frame(self, padding=16)
         root.pack(fill="both", expand=True)
         root.columnconfigure(1, weight=1)
-        root.rowconfigure(7, weight=1)
+        root.rowconfigure(10, weight=1)
 
         ttk.Label(root, text="CarrotKeyboard Mac", font=("TkDefaultFont", 18, "bold")).grid(
             row=0, column=0, columnspan=3, sticky="w"
         )
-        ttk.Label(root, text="Send this Mac keyboard and mouse to a Windows PC.").grid(
+        ttk.Label(root, text="Send this Mac keyboard and mouse to Windows or Android.").grid(
             row=1, column=0, columnspan=3, sticky="w", pady=(2, 14)
         )
 
         ttk.Label(root, text="Windows PC IP").grid(row=2, column=0, sticky="w", pady=4)
-        ttk.Entry(root, textvariable=self.host_var).grid(
+        ttk.Entry(root, textvariable=self.windows_host_var).grid(
             row=2, column=1, columnspan=2, sticky="ew", pady=4
         )
 
-        ttk.Label(root, text="Port").grid(row=3, column=0, sticky="w", pady=4)
+        ttk.Label(root, text="Android Phone IP").grid(row=3, column=0, sticky="w", pady=4)
+        ttk.Entry(root, textvariable=self.android_host_var).grid(
+            row=3, column=1, columnspan=2, sticky="ew", pady=4
+        )
+
+        ttk.Label(root, text="Port").grid(row=4, column=0, sticky="w", pady=4)
         options = ttk.Frame(root)
-        options.grid(row=3, column=1, columnspan=2, sticky="ew", pady=4)
+        options.grid(row=4, column=1, columnspan=2, sticky="ew", pady=4)
         ttk.Entry(options, textvariable=self.port_var, width=10).pack(side="left")
         ttk.Checkbutton(
             options,
@@ -472,10 +528,10 @@ class MacGui(tk.Tk):
         ).pack(side="left", padx=(16, 0))
 
         mouse_options = ttk.Frame(root)
-        mouse_options.grid(row=4, column=0, columnspan=3, sticky="w", pady=4)
+        mouse_options.grid(row=5, column=0, columnspan=3, sticky="w", pady=4)
         ttk.Checkbutton(
             mouse_options,
-            text="Forward mouse to Windows",
+            text="Forward mouse to target",
             variable=self.forward_mouse_var,
         ).pack(side="left")
         ttk.Checkbutton(
@@ -490,50 +546,106 @@ class MacGui(tk.Tk):
             command=self.save_current_config,
         ).pack(side="left", padx=(16, 0))
 
-        ttk.Label(root, text="Start/Stop hotkey").grid(row=5, column=0, sticky="w", pady=4)
-        hotkey_frame = ttk.Frame(root)
-        hotkey_frame.grid(row=5, column=1, columnspan=2, sticky="ew", pady=4)
-        hotkey_frame.columnconfigure(0, weight=1)
+        ttk.Label(root, text="Windows hotkey").grid(row=6, column=0, sticky="w", pady=4)
+        windows_hotkey_frame = ttk.Frame(root)
+        windows_hotkey_frame.grid(row=6, column=1, columnspan=2, sticky="ew", pady=4)
+        windows_hotkey_frame.columnconfigure(0, weight=1)
         ttk.Label(
-            hotkey_frame,
-            textvariable=self.hotkey_display_var,
-            font=("TkDefaultFont", 14, "bold"),
+            windows_hotkey_frame,
+            textvariable=self.windows_hotkey_display_var,
+            font=("TkDefaultFont", 13, "bold"),
             relief="sunken",
-            padding=(10, 7),
+            padding=(10, 6),
         ).grid(row=0, column=0, sticky="ew")
-        ttk.Button(hotkey_frame, text="● Record", command=self.record_hotkey).grid(
-            row=0, column=1, padx=(8, 0), ipadx=8, ipady=4
+        ttk.Button(windows_hotkey_frame, text="● Record", command=self.record_windows_hotkey).grid(
+            row=0, column=1, padx=(8, 0), ipadx=8, ipady=3
         )
-        ttk.Button(hotkey_frame, text="↺ Reset", command=self.reset_hotkey).grid(
-            row=0, column=2, padx=(8, 0), ipadx=8, ipady=4
+
+        ttk.Label(root, text="Android hotkey").grid(row=7, column=0, sticky="w", pady=4)
+        android_hotkey_frame = ttk.Frame(root)
+        android_hotkey_frame.grid(row=7, column=1, columnspan=2, sticky="ew", pady=4)
+        android_hotkey_frame.columnconfigure(0, weight=1)
+        ttk.Label(
+            android_hotkey_frame,
+            textvariable=self.android_hotkey_display_var,
+            font=("TkDefaultFont", 13, "bold"),
+            relief="sunken",
+            padding=(10, 6),
+        ).grid(row=0, column=0, sticky="ew")
+        ttk.Button(android_hotkey_frame, text="● Record", command=self.record_android_hotkey).grid(
+            row=0, column=1, padx=(8, 0), ipadx=8, ipady=3
+        )
+
+        ttk.Label(root, text="Android rotate hotkey").grid(row=8, column=0, sticky="w", pady=4)
+        android_rotate_hotkey_frame = ttk.Frame(root)
+        android_rotate_hotkey_frame.grid(row=8, column=1, columnspan=2, sticky="ew", pady=4)
+        android_rotate_hotkey_frame.columnconfigure(0, weight=1)
+        ttk.Label(
+            android_rotate_hotkey_frame,
+            textvariable=self.android_rotate_hotkey_display_var,
+            font=("TkDefaultFont", 13, "bold"),
+            relief="sunken",
+            padding=(10, 6),
+        ).grid(row=0, column=0, sticky="ew")
+        ttk.Button(android_rotate_hotkey_frame, text="● Record", command=self.record_android_rotate_hotkey).grid(
+            row=0, column=1, padx=(8, 0), ipadx=8, ipady=3
         )
 
         ttk.Label(root, textvariable=self.status_var).grid(
-            row=6, column=0, columnspan=3, sticky="w", pady=(8, 8)
+            row=9, column=0, columnspan=3, sticky="w", pady=(8, 8)
         )
 
         self.log_text = tk.Text(root, height=9, wrap="word", state="disabled")
-        self.log_text.grid(row=7, column=0, columnspan=3, sticky="nsew")
+        self.log_text.grid(row=10, column=0, columnspan=3, sticky="nsew")
 
         buttons = ttk.Frame(root)
-        buttons.grid(row=8, column=0, columnspan=3, sticky="ew", pady=(12, 0))
+        buttons.grid(row=11, column=0, columnspan=3, sticky="ew", pady=(12, 0))
         buttons.columnconfigure(0, weight=1)
-        self.toggle_button = ttk.Button(buttons, text="▶ Start", command=self.toggle, style="Action.TButton")
-        self.toggle_button.grid(row=0, column=1)
+        self.windows_button = ttk.Button(
+            buttons,
+            text="▶ Windows",
+            command=lambda: self.toggle_target("Windows PC"),
+            style="Action.TButton",
+        )
+        self.windows_button.grid(row=0, column=1)
+        self.android_button = ttk.Button(
+            buttons,
+            text="▶ Android",
+            command=lambda: self.toggle_target("Android Phone"),
+            style="Action.TButton",
+        )
+        self.android_button.grid(row=0, column=2, padx=(10, 0))
         ttk.Button(buttons, text="⌫ Clear Log", command=self.clear_log, style="SecondaryAction.TButton").grid(
-            row=0, column=2, padx=(10, 0)
+            row=0, column=3, padx=(10, 0)
         )
 
-    def build_command(self):
-        host = self.host_var.get().strip()
+    def build_command(self, target=None):
+        target = target or self.target_var.get()
+        host = self.get_host_for_target(target)
         port = self.port_var.get().strip()
         if not host:
-            raise ValueError("Windows PC IP is required.")
+            raise ValueError(f"{target} IP is required.")
         if not port.isdigit():
             raise ValueError("Port must be a number.")
-        hotkey = parse_hotkey(self.hotkey_var.get())
+        if target == "Android Phone":
+            hotkey = parse_hotkey(self.android_hotkey_var.get())
+            rotate_hotkey = parse_hotkey(self.android_rotate_hotkey_var.get())
+        else:
+            hotkey = parse_hotkey(self.windows_hotkey_var.get())
+            rotate_hotkey = set()
 
-        command = [sys.executable, "-u", os.path.abspath(__file__), "--send", "--host", host, "--port", port]
+        command = [
+            sys.executable,
+            "-u",
+            os.path.abspath(__file__),
+            "--send",
+            "--host",
+            host,
+            "--port",
+            port,
+            "--target",
+            target,
+        ]
         if not self.suppress_keyboard_var.get():
             command.append("--no-suppress")
         if not self.forward_mouse_var.get():
@@ -541,13 +653,19 @@ class MacGui(tk.Tk):
         if self.suppress_mouse_var.get():
             command.append("--suppress-mouse")
         command += ["--hotkey", serialize_hotkey(hotkey)]
+        if rotate_hotkey:
+            command += ["--rotate-hotkey", serialize_hotkey(rotate_hotkey)]
         return command
 
     def bind_config_saves(self):
         for variable in (
-            self.host_var,
+            self.windows_host_var,
+            self.android_host_var,
+            self.target_var,
             self.port_var,
-            self.hotkey_var,
+            self.windows_hotkey_var,
+            self.android_hotkey_var,
+            self.android_rotate_hotkey_var,
             self.suppress_keyboard_var,
             self.forward_mouse_var,
             self.suppress_mouse_var,
@@ -557,13 +675,17 @@ class MacGui(tk.Tk):
 
     def current_config(self):
         return {
-            "host": self.host_var.get().strip(),
+            "windows_host": self.windows_host_var.get().strip(),
+            "android_host": self.android_host_var.get().strip(),
+            "target": self.target_var.get(),
             "port": self.port_var.get().strip() or DEFAULT_PORT,
             "suppress_keyboard": bool(self.suppress_keyboard_var.get()),
             "forward_mouse": bool(self.forward_mouse_var.get()),
             "suppress_mouse": bool(self.suppress_mouse_var.get()),
             "auto_start": bool(self.auto_start_var.get()),
-            "hotkey": self.hotkey_var.get(),
+            "windows_hotkey": self.windows_hotkey_var.get(),
+            "android_hotkey": self.android_hotkey_var.get(),
+            "android_rotate_hotkey": self.android_rotate_hotkey_var.get(),
         }
 
     def save_current_config(self):
@@ -577,37 +699,105 @@ class MacGui(tk.Tk):
             return
         if self.process and self.process.poll() is None:
             return
-        if not self.host_var.get().strip():
-            self.append_log("Auto Start skipped: missing Windows PC IP.")
+        if not self.get_host_for_target(self.target_var.get()):
+            self.append_log("Auto Start skipped: missing target IP.")
             return
         self.append_log("Auto Start enabled.")
-        self.toggle()
+        self.toggle_target(self.target_var.get())
 
-    def set_hotkey(self, tokens):
-        self.hotkey_var.set(serialize_hotkey(tokens))
-        self.hotkey_display_var.set(format_hotkey(tokens))
+    def get_host_for_target(self, target):
+        if target == "Android Phone":
+            return self.android_host_var.get().strip()
+        return self.windows_host_var.get().strip()
+
+    def set_windows_hotkey(self, tokens):
+        self.windows_hotkey_var.set(serialize_hotkey(tokens))
+        self.windows_hotkey_display_var.set(format_hotkey(tokens))
         self.gui_pressed.clear()
         self.hotkey_armed = True
         self.save_current_config()
 
-    def record_hotkey(self):
+    def set_android_hotkey(self, tokens):
+        self.android_hotkey_var.set(serialize_hotkey(tokens))
+        self.android_hotkey_display_var.set(format_hotkey(tokens))
+        self.gui_pressed.clear()
+        self.hotkey_armed = True
+        self.save_current_config()
+
+    def set_android_rotate_hotkey(self, tokens):
+        self.android_rotate_hotkey_var.set(serialize_hotkey(tokens))
+        self.android_rotate_hotkey_display_var.set(format_hotkey(tokens))
+        self.gui_pressed.clear()
+        self.hotkey_armed = True
+        self.save_current_config()
+
+    def record_windows_hotkey(self):
+        self.record_target_hotkey(
+            self.windows_hotkey_var,
+            self.set_windows_hotkey,
+            DEFAULT_WINDOWS_HOTKEY,
+            "Record Windows Hotkey",
+        )
+
+    def record_android_hotkey(self):
+        self.record_target_hotkey(
+            self.android_hotkey_var,
+            self.set_android_hotkey,
+            DEFAULT_ANDROID_HOTKEY,
+            "Record Android Hotkey",
+        )
+
+    def record_android_rotate_hotkey(self):
+        self.record_target_hotkey(
+            self.android_rotate_hotkey_var,
+            self.set_android_rotate_hotkey,
+            DEFAULT_ANDROID_ROTATE_HOTKEY,
+            "Record Android Rotate Hotkey",
+        )
+
+    def record_target_hotkey(self, variable, setter, default_value, title):
         try:
-            current_hotkey = parse_hotkey(self.hotkey_var.get())
+            current_hotkey = parse_hotkey(variable.get())
         except ValueError:
-            current_hotkey = parse_hotkey(DEFAULT_HOTKEY)
+            current_hotkey = parse_hotkey(default_value)
+        default_hotkey = parse_hotkey(default_value)
 
         self.recording_hotkey = True
-        recorder = HotkeyRecorder(self, current_hotkey)
+        recorder = HotkeyRecorder(self, current_hotkey, default_hotkey, title)
         self.wait_window(recorder)
         self.recording_hotkey = False
         self.gui_pressed.clear()
         self.hotkey_armed = True
 
         if recorder.result:
-            self.set_hotkey(recorder.result)
+            setter(recorder.result)
 
-    def reset_hotkey(self):
-        self.set_hotkey(parse_hotkey(DEFAULT_HOTKEY))
+    def toggle_target(self, target):
+        if self.process and self.process.poll() is None:
+            if self.target_var.get() == target:
+                self.stop_process()
+                return
+            self.stop_process()
+
+        self.target_var.set(target)
+        try:
+            command = self.build_command(target)
+        except ValueError as exc:
+            messagebox.showerror("CarrotKeyboard Mac", str(exc))
+            return
+
+        self.append_log("$ " + " ".join(command))
+        self.save_current_config()
+        self.process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        threading.Thread(target=self.read_process_output, daemon=True).start()
+        self.status_var.set(f"Running: {target}")
+        self.update_target_buttons()
 
     def start_hotkey_listener(self):
         self.hotkey_listener = keyboard.Listener(
@@ -626,13 +816,20 @@ class MacGui(tk.Tk):
             self.gui_pressed.add(token)
 
         try:
-            hotkey = parse_hotkey(self.hotkey_var.get())
+            windows_hotkey = parse_hotkey(self.windows_hotkey_var.get())
         except ValueError:
-            return
+            windows_hotkey = set()
+        try:
+            android_hotkey = parse_hotkey(self.android_hotkey_var.get())
+        except ValueError:
+            android_hotkey = set()
 
-        if self.hotkey_armed and hotkey.issubset(self.gui_pressed):
+        if self.hotkey_armed and windows_hotkey and windows_hotkey.issubset(self.gui_pressed):
             self.hotkey_armed = False
-            self.after(0, self.toggle)
+            self.after(0, lambda: self.toggle_target("Windows PC"))
+        elif self.hotkey_armed and android_hotkey and android_hotkey.issubset(self.gui_pressed):
+            self.hotkey_armed = False
+            self.after(0, lambda: self.toggle_target("Android Phone"))
 
     def on_gui_hotkey_release(self, key):
         if self.recording_hotkey:
@@ -642,37 +839,18 @@ class MacGui(tk.Tk):
         if token:
             self.gui_pressed.discard(token)
 
-        try:
-            hotkey = parse_hotkey(self.hotkey_var.get())
-        except ValueError:
-            hotkey = set()
+        target_hotkeys = []
+        for variable in (self.windows_hotkey_var, self.android_hotkey_var):
+            try:
+                target_hotkeys.append(parse_hotkey(variable.get()))
+            except ValueError:
+                pass
 
-        if not hotkey or not hotkey.issubset(self.gui_pressed):
+        if not any(hotkey and hotkey.issubset(self.gui_pressed) for hotkey in target_hotkeys):
             self.hotkey_armed = True
 
     def toggle(self):
-        if self.process and self.process.poll() is None:
-            self.stop_process()
-            return
-
-        try:
-            command = self.build_command()
-        except ValueError as exc:
-            messagebox.showerror("CarrotKeyboard Mac", str(exc))
-            return
-
-        self.append_log("$ " + " ".join(command))
-        self.save_current_config()
-        self.process = subprocess.Popen(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-        )
-        threading.Thread(target=self.read_process_output, daemon=True).start()
-        self.status_var.set("Running")
-        self.toggle_button.configure(text="■ Stop")
+        self.toggle_target(self.target_var.get())
 
     def stop_process(self):
         if self.process and self.process.poll() is None:
@@ -683,7 +861,7 @@ class MacGui(tk.Tk):
                 self.process.kill()
         self.process = None
         self.status_var.set("Stopped")
-        self.toggle_button.configure(text="▶ Start")
+        self.update_target_buttons()
         self.append_log("Stopped.")
 
     def read_process_output(self):
@@ -704,8 +882,16 @@ class MacGui(tk.Tk):
             if line.startswith("Process exited"):
                 self.process = None
                 self.status_var.set("Stopped")
-                self.toggle_button.configure(text="▶ Start")
+                self.update_target_buttons()
         self.after(100, self.drain_output)
+
+    def update_target_buttons(self):
+        running = bool(self.process and self.process.poll() is None)
+        active = self.target_var.get()
+        if hasattr(self, "windows_button"):
+            self.windows_button.configure(text="■ Windows" if running and active == "Windows PC" else "▶ Windows")
+        if hasattr(self, "android_button"):
+            self.android_button.configure(text="■ Android" if running and active == "Android Phone" else "▶ Android")
 
     def append_log(self, line):
         self.log_text.configure(state="normal")
@@ -734,6 +920,12 @@ def parse_args():
     parser.add_argument("--no-mouse", action="store_true", help="Do not forward mouse events.")
     parser.add_argument("--suppress-mouse", action="store_true", help="Block mouse events on Mac.")
     parser.add_argument("--hotkey", default=DEFAULT_HOTKEY, help="Stop hotkey, such as cmd+option+control+q.")
+    parser.add_argument(
+        "--rotate-hotkey",
+        default="",
+        help="Android-only hotkey that toggles phone orientation while Android sender is active.",
+    )
+    parser.add_argument("--target", default="Windows PC", help="Target label used in logs.")
     return parser.parse_args()
 
 
@@ -748,6 +940,11 @@ def main():
         except ValueError as exc:
             print(f"Invalid hotkey: {exc}")
             sys.exit(1)
+        try:
+            rotate_hotkey = parse_hotkey(args.rotate_hotkey) if args.rotate_hotkey else set()
+        except ValueError as exc:
+            print(f"Invalid rotate hotkey: {exc}")
+            sys.exit(1)
         MacSender(
             args.host,
             args.port,
@@ -755,6 +952,8 @@ def main():
             forward_mouse=not args.no_mouse,
             suppress_mouse=args.suppress_mouse,
             hotkey=hotkey,
+            target_name=args.target,
+            rotate_hotkey=rotate_hotkey,
         ).run()
         return
 

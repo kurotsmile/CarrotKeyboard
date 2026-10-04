@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">CarrotKeyboard Receiver</string>
+    <string name="accessibility_description">Receive keyboard, tap, click, and scroll commands from CarrotKeyboard on Mac.</string>
+</resources>

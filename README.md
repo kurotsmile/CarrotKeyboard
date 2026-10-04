@@ -6,12 +6,14 @@ Tool chỉ đi một chiều:
 
 ```text
 Mac keyboard/mouse -> Windows PC
+Mac keyboard/mouse -> Android Phone
 ```
 
 Mỗi hệ điều hành có file riêng để tránh xung đột thư viện/phím đặc thù:
 
 - `mac.py`: chạy trên Mac, bắt phím/chuột và gửi qua mạng.
 - `win.py`: chạy trên Windows, nhận phím/chuột và nhập vào hệ thống.
+- `android_receiver/`: app Android receiver, nhận lệnh qua LAN và thao tác bằng Accessibility Service.
 
 ## Cách chạy
 
@@ -30,9 +32,10 @@ ipconfig
 ### Trên Mac
 
 1. Mở `CarrotKeyboard.app` hoặc chạy `run_mac_sender.command`.
-2. Nhập IP của Windows PC vào ô `Windows PC IP`.
-3. Bấm `Start`.
-4. Nếu macOS hỏi quyền, cấp quyền trong:
+2. Nhập IP vào ô riêng: `Windows PC IP` hoặc `Android Phone IP`.
+3. Bấm `▶ Windows` hoặc `▶ Android`, hoặc dùng hotkey tương ứng.
+4. Bấm lại cùng nút/hotkey để tắt target đang chạy.
+5. Nếu macOS hỏi quyền, cấp quyền trong:
    - System Settings > Privacy & Security > Accessibility
    - System Settings > Privacy & Security > Input Monitoring
 
@@ -47,6 +50,39 @@ Nếu mở app mà không thấy cửa sổ, xem log:
 
 ```bash
 tail -100 "$HOME/Library/Logs/CarrotKeyboard.log"
+```
+
+### Trên Android Phone
+
+1. Build APK:
+
+```bash
+cd android_receiver
+./build_apk.command
+```
+
+2. Cài APK:
+
+```bash
+adb install -r android_receiver/build/CarrotKeyboardReceiver-debug.apk
+```
+
+Nếu đang đứng trong thư mục `android_receiver`, dùng:
+
+```bash
+adb install -r build/CarrotKeyboardReceiver-debug.apk
+```
+
+3. Mở app `CarrotKeyboard Receiver`.
+4. Bấm `Accessibility`, bật service `CarrotKeyboard Receiver`.
+5. Quay lại app, bấm `Start`.
+6. Nếu muốn dùng hotkey xoay dọc/ngang, bấm `Rotation Permission` và bật quyền `Allow modify system settings`.
+7. Xem `Phone IP`, nhập IP này vào Mac app ở ô `Android Phone IP`.
+
+APK đã build nằm tại:
+
+```text
+android_receiver/build/CarrotKeyboardReceiver-debug.apk
 ```
 
 ## Build Mac App
@@ -65,21 +101,25 @@ CarrotKeyboard.app
 
 Khi đang chạy, mặc định phím sẽ được chặn ở Mac và gửi sang Windows. Nếu muốn vừa gõ trên Mac vừa gửi sang Windows, bỏ chọn `Block keys on Mac while forwarding`.
 Chuột mặc định được gửi sang Windows nhưng không bị chặn ở Mac. Nếu muốn chuột chỉ điều khiển Windows, chọn `Block mouse on Mac`.
-Bạn có thể đổi tổ hợp phím Start/Stop bằng nút `Record`: bấm `Record`, nhấn tổ hợp phím muốn dùng, rồi bấm `Save`.
-Nếu bật `Auto Start`, lần sau mở app tool sẽ tự Start sau khi khởi động xong, miễn là đã có `Windows PC IP`.
+Bạn có thể đổi từng hotkey bằng nút `Record`: bấm `Record`, nhấn tổ hợp phím muốn dùng, rồi bấm `Save`.
+Nếu bật `Auto Start`, lần sau mở app tool sẽ tự Start target đã dùng gần nhất, miễn là target đó đã có IP.
 
 ## GUI trên Mac
 
-- `Windows PC IP`: IP của máy Windows.
+- `Windows PC IP`: IP của máy Windows, được lưu riêng.
+- `Android Phone IP`: IP của điện thoại Android, được lưu riêng.
 - `Port`: cổng TCP, mặc định `50505`.
-- `Block keys on Mac while forwarding`: chặn phím ở Mac để bàn phím chỉ điều khiển Windows.
-- `Forward mouse to Windows`: gửi di chuyển/click/scroll chuột sang Windows.
-- `Block mouse on Mac`: chặn chuột ở Mac khi đang gửi sang Windows.
+- `Block keys on Mac while forwarding`: chặn phím ở Mac để bàn phím chỉ điều khiển target.
+- `Forward mouse to target`: gửi di chuyển/click/scroll chuột sang target đang chọn.
+- `Block mouse on Mac`: chặn chuột ở Mac khi đang gửi sang target.
 - `Auto Start`: tự bật sender khi app mở xong.
-- `Start/Stop hotkey`: hiển thị tổ hợp phím bật/tắt sender, mặc định `⌘ + ⌥ + ⌃ + Q`.
+- `Windows hotkey`: bật/tắt điều khiển Windows PC, mặc định `⌘ + ⌥ + ⌃ + W`.
+- `Android hotkey`: bật/tắt điều khiển Android Phone, mặc định `⌘ + ⌥ + ⌃ + A`.
+- `Android rotate hotkey`: xoay dọc/ngang màn hình Android, mặc định `⌘ + ⌥ + ⌃ + R`. Hotkey này chỉ hoạt động khi Android hotkey đang bật.
 - `● Record`: học tổ hợp phím mới bằng cách nhấn trực tiếp trên bàn phím.
 - `↺ Reset`: đưa hotkey về mặc định.
-- `▶ Start` / `■ Stop`: bật hoặc tắt sender.
+- `▶ Windows` / `■ Windows`: bật hoặc tắt Windows PC.
+- `▶ Android` / `■ Android`: bật hoặc tắt Android Phone.
 - `Log`: xem trạng thái kết nối và lỗi nếu có.
 
 ## GUI trên Windows
@@ -89,6 +129,21 @@ Nếu bật `Auto Start`, lần sau mở app tool sẽ tự Start sau khi khởi
 - `▶ Start` / `■ Stop`: bật hoặc tắt receiver.
 - `⌫ Clear Log`: xóa log trên màn hình.
 - `Log`: xem trạng thái kết nối và lỗi nếu có.
+
+## Android Receiver
+
+- `Phone IP`: IP nhập vào Mac app.
+- `Accessibility`: mở màn hình bật Accessibility Service.
+- `Rotation Permission`: mở màn hình cấp quyền `Modify system settings` để app có thể xoay dọc/ngang.
+- `Click Mode`: đổi cách click trên Android:
+  - `Smart`: tìm đúng button/view dưới con trỏ rồi click bằng Accessibility.
+  - `Gesture`: tap theo tọa độ như ngón tay.
+  - `Smart + Gesture`: thử cả hai, dùng khi một số nút khó click.
+- `Start/Stop`: bật hoặc tắt TCP receiver trên Android.
+- Khi Accessibility Service bật, app hiển thị một con trỏ nổi cỡ lớn trên màn hình Android.
+- Text nhập vào ô đang focus sẽ được append qua Accessibility.
+- Chuột Mac: di chuyển làm con trỏ nổi di chuyển, click thành tap, scroll thành swipe.
+- Để vuốt qua màn hình Android, nhấn giữ chuột trên Mac, kéo, rồi thả. App sẽ chuyển thao tác đó thành gesture swipe thật trên Android.
 
 ## Chạy bằng dòng lệnh
 
@@ -104,6 +159,12 @@ python mac.py --send --host WINDOWS_IP
 python mac.py --send --host WINDOWS_IP --hotkey cmd+option+control+q
 ```
 
+Đổi hotkey xoay Android khi chạy CLI:
+
+```bash
+python mac.py --send --host PHONE_IP --target "Android Phone" --hotkey cmd+option+control+a --rotate-hotkey cmd+option+control+r
+```
+
 Windows receiver:
 
 ```bat
@@ -112,13 +173,15 @@ python win.py --receive
 
 ## Dừng tool
 
-Trên Mac nhấn:
+Trên Mac nhấn hotkey target đang chạy:
 
 ```text
-Command + Option + Control + Q
+Windows: Command + Option + Control + W
+Android: Command + Option + Control + A
+Android rotate: Command + Option + Control + R
 ```
 
-Hoặc dùng tổ hợp phím bạn đã thiết lập trong `Start/Stop hotkey`, hoặc bấm `Stop` trong GUI.
+Hoặc bấm lại nút target đang chạy trong GUI.
 
 ## Ghi chú
 
