@@ -27,6 +27,7 @@ public class CarrotAccessibilityService extends AccessibilityService {
     private static final String PREFS_NAME = "carrot_keyboard";
     private static final String PREF_CLICK_MODE = "click_mode";
     private static final String PREF_MOUSE_ENABLED = "mouse_enabled";
+    private static final String PREF_ROTATION_DEGREES = "rotation_degrees";
     private static final int CLICK_MODE_SMART = 0;
     private static final int CLICK_MODE_GESTURE = 1;
     private static final int CLICK_MODE_BOTH = 2;
@@ -108,17 +109,65 @@ public class CarrotAccessibilityService extends AccessibilityService {
             return;
         }
 
-        int current = Settings.System.getInt(
+        int nextDegrees = nextRotationDegrees(getRotationDegrees());
+
+        Settings.System.putInt(getContentResolver(), Settings.System.ACCELEROMETER_ROTATION, 0);
+        Settings.System.putInt(getContentResolver(), Settings.System.USER_ROTATION, surfaceRotationForDegrees(nextDegrees));
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .edit()
+            .putInt(PREF_ROTATION_DEGREES, nextDegrees)
+            .apply();
+    }
+
+    private int getRotationDegrees() {
+        int saved = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getInt(PREF_ROTATION_DEGREES, -1);
+        if (saved == 0 || saved == 90 || saved == 180 || saved == 270) {
+            return saved;
+        }
+        return degreesForSurfaceRotation(Settings.System.getInt(
             getContentResolver(),
             Settings.System.USER_ROTATION,
             Surface.ROTATION_0
-        );
-        int next = (current == Surface.ROTATION_0 || current == Surface.ROTATION_180)
-            ? Surface.ROTATION_90
-            : Surface.ROTATION_0;
+        ));
+    }
 
-        Settings.System.putInt(getContentResolver(), Settings.System.ACCELEROMETER_ROTATION, 0);
-        Settings.System.putInt(getContentResolver(), Settings.System.USER_ROTATION, next);
+    private int nextRotationDegrees(int currentDegrees) {
+        if (currentDegrees == 0) {
+            return 90;
+        }
+        if (currentDegrees == 90) {
+            return 180;
+        }
+        if (currentDegrees == 180) {
+            return 270;
+        }
+        return 0;
+    }
+
+    private int surfaceRotationForDegrees(int degrees) {
+        if (degrees == 90) {
+            return Surface.ROTATION_90;
+        }
+        if (degrees == 180) {
+            return Surface.ROTATION_180;
+        }
+        if (degrees == 270) {
+            return Surface.ROTATION_270;
+        }
+        return Surface.ROTATION_0;
+    }
+
+    private int degreesForSurfaceRotation(int rotation) {
+        if (rotation == Surface.ROTATION_90) {
+            return 90;
+        }
+        if (rotation == Surface.ROTATION_180) {
+            return 180;
+        }
+        if (rotation == Surface.ROTATION_270) {
+            return 270;
+        }
+        return 0;
     }
 
     private void handleMouse(JSONObject event) {

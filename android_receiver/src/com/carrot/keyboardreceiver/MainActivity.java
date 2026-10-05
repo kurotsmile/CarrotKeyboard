@@ -7,6 +7,7 @@ import android.os.Bundle;
 import android.provider.Settings;
 import android.graphics.Typeface;
 import android.view.Gravity;
+import android.view.Surface;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -28,6 +29,7 @@ public class MainActivity extends Activity {
     private static final String PREFS_NAME = "carrot_keyboard";
     private static final String PREF_CLICK_MODE = "click_mode";
     private static final String PREF_MOUSE_ENABLED = "mouse_enabled";
+    private static final String PREF_ROTATION_DEGREES = "rotation_degrees";
     private static final int CLICK_MODE_SMART = 0;
     private static final int CLICK_MODE_GESTURE = 1;
     private static final int CLICK_MODE_BOTH = 2;
@@ -85,6 +87,11 @@ public class MainActivity extends Activity {
         rotationButton.setText("Rotation Permission");
         rotationButton.setOnClickListener(v -> openRotationPermission());
         buttons.addView(rotationButton);
+
+        Button rotateScreenButton = new Button(this);
+        rotateScreenButton.setText("Rotate Screen");
+        rotateScreenButton.setOnClickListener(v -> rotateScreen());
+        buttons.addView(rotateScreenButton);
 
         Button clickModeButton = new Button(this);
         clickModeButton.setText("Click Mode");
@@ -144,6 +151,7 @@ public class MainActivity extends Activity {
             + "Port: " + DEFAULT_PORT + "\n"
             + "Accessibility Service: " + (CarrotAccessibilityService.isReady() ? "Enabled" : "Not enabled") + "\n"
             + "Rotation Permission: " + (Settings.System.canWrite(this) ? "Allowed" : "Not allowed") + "\n"
+            + "Rotation: " + getRotationDegrees() + "°\n"
             + "Mouse Control: " + (isMouseControlEnabled() ? "On" : "Off") + "\n"
             + "Click Mode: " + getClickModeName() + "\n"
             + "Server: " + (serverThread == null ? "Stopped" : "Running");
@@ -174,6 +182,19 @@ public class MainActivity extends Activity {
         updateStatus();
     }
 
+    private void rotateScreen() {
+        if (!Settings.System.canWrite(this)) {
+            appendLog("Rotation Permission: Not allowed");
+            openRotationPermission();
+            return;
+        }
+
+        int nextDegrees = nextRotationDegrees(getRotationDegrees());
+        applyRotation(nextDegrees);
+        appendLog("Rotation: " + nextDegrees + "°");
+        updateStatus();
+    }
+
     private void toggleMouseControl() {
         boolean enabled = !isMouseControlEnabled();
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
@@ -187,6 +208,66 @@ public class MainActivity extends Activity {
 
     private boolean isMouseControlEnabled() {
         return getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_MOUSE_ENABLED, true);
+    }
+
+    private int getRotationDegrees() {
+        int saved = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getInt(PREF_ROTATION_DEGREES, -1);
+        if (saved == 0 || saved == 90 || saved == 180 || saved == 270) {
+            return saved;
+        }
+        return degreesForSurfaceRotation(Settings.System.getInt(
+            getContentResolver(),
+            Settings.System.USER_ROTATION,
+            Surface.ROTATION_0
+        ));
+    }
+
+    private int nextRotationDegrees(int currentDegrees) {
+        if (currentDegrees == 0) {
+            return 90;
+        }
+        if (currentDegrees == 90) {
+            return 180;
+        }
+        if (currentDegrees == 180) {
+            return 270;
+        }
+        return 0;
+    }
+
+    private void applyRotation(int degrees) {
+        Settings.System.putInt(getContentResolver(), Settings.System.ACCELEROMETER_ROTATION, 0);
+        Settings.System.putInt(getContentResolver(), Settings.System.USER_ROTATION, surfaceRotationForDegrees(degrees));
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .edit()
+            .putInt(PREF_ROTATION_DEGREES, degrees)
+            .apply();
+    }
+
+    private int surfaceRotationForDegrees(int degrees) {
+        if (degrees == 90) {
+            return Surface.ROTATION_90;
+        }
+        if (degrees == 180) {
+            return Surface.ROTATION_180;
+        }
+        if (degrees == 270) {
+            return Surface.ROTATION_270;
+        }
+        return Surface.ROTATION_0;
+    }
+
+    private int degreesForSurfaceRotation(int rotation) {
+        if (rotation == Surface.ROTATION_90) {
+            return 90;
+        }
+        if (rotation == Surface.ROTATION_180) {
+            return 180;
+        }
+        if (rotation == Surface.ROTATION_270) {
+            return 270;
+        }
+        return 0;
     }
 
     private String getClickModeName() {
@@ -267,6 +348,9 @@ public class MainActivity extends Activity {
                 while (running && (line = reader.readLine()) != null) {
                     JSONObject event = new JSONObject(line);
                     CarrotAccessibilityService.handle(event);
+                    if ("system".equals(event.optString("device", "")) && "rotate".equals(event.optString("action", ""))) {
+                        appendLog("Rotation command");
+                    }
                 }
             } catch (Exception exc) {
                 appendLog("Client error: " + exc.getMessage());
